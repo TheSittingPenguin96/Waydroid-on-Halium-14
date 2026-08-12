@@ -1,0 +1,10 @@
+# The built vendor image is ~90 MB. It is distributed as a GitHub Release
+# attachment rather than in git history, so clones stay small.
+# The checksum is tracked so a downloaded image can be verified:
+#   sha256sum -c artifacts/HALIUM_14-waydroid_arm64-vendor.img.sha256
+artifacts/*.img
+artifacts/*.zip
+
+# Local scratch
+*.log
+*~
