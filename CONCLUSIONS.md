@@ -1,7 +1,6 @@
 # Waydroid on Halium 14 — corrected conclusions
 
-**This is the authoritative account.** Everything else in this repo (and in
-`waydroid-halium14/FINDINGS.md`, `HANDOFF.md`) is a historical record of how I
+**This is the authoritative account.** Everything else in this repo is a historical record of how I
 got here, and contains conclusions I later disproved. Where they disagree with
 this file, this file wins.
 
@@ -202,8 +201,6 @@ Recorded because each looked convincing and each cost hours.
 
 **Building on a small machine**
 - `systemd-oomd` kills on *pressure*, not exhaustion, and kills whole cgroups — `nohup` is no defence. Ubuntu sets `ManagedOOMMemoryPressure=kill` at 50% on `user@1000.service`. Run builds as a `system.slice` unit with `IgnoreOnIsolate=yes`.
-- Your editor may be the memory hog: VS Code's Java language servers held 5.3 GB.
-- Do not power-cycle to restore the GUI — `systemctl isolate graphical.target`.
 - `all-makefiles-under` is exactly one level deep (`$(wildcard $(1)/*/Android.mk)`).
 - ELF shared libraries cannot ship via `PRODUCT_COPY_FILES`; use a prebuilt module, and `LOCAL_MODULE_STEM` if the name collides.
 - **`MAKE_EXIT=0` says nothing about whether your change is in the image.** Twice I produced a green build and a correctly-sized image missing the payload. Verify with `debugfs -R "ls -l /lib64" vendor.img` and compare checksums.
