@@ -8,3 +8,6 @@ artifacts/*.zip
 # Local scratch
 *.log
 *~
+
+# Reverse-engineering working copies of vendor binaries (not redistributable)
+re/

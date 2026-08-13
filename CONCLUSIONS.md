@@ -115,8 +115,21 @@ Abort message: 'Unable to retrieve GPU capabilities. XML file either not found
 ```
 
 This killed `surfaceflinger` **even on the otherwise-working ANGLE path**,
-turning a graceful degradation into a hard failure. The libraries belong in a
-HALIUM_14 image, but only together with whatever satisfies that mapper.
+turning a graceful degradation into a hard failure.
+
+**Cause identified 2026-08-13 by reverse engineering the mapper.** It reads GPU
+capability XML from the *directory* `/vendor/etc/gralloc`, recovered from the
+binary itself — `strings -a` yields `/vendor/etc/gralloc` and `Failed to open
+capability directory:`, and `readelf -d` shows libxml2 is statically linked, so
+a missing parser was never the issue. The host has five capability files there;
+Waydroid's vendor image has no `etc/gralloc` at all, and the host copy lands at
+`/vendor_extra/etc/gralloc` in the container. The mapper looks in a directory
+that does not exist.
+
+The libraries therefore belong in a HALIUM_14 image **together with** something
+that makes `/vendor/etc/gralloc` visible. Recovery method in TODO item 5; fix in
+`scripts/add_gralloc_capabilities.py`. Until that is confirmed booting on
+device, the warning above still stands for the published image.
 
 ## 5. What actually needs doing
 
@@ -126,11 +139,14 @@ HALIUM_14 image, but only together with whatever satisfies that mapper.
 | 2 | Publish a `HALIUM_14` vendor channel, or map vndk 34 to an existing one | Waydroid OTA / `get_vendor_type()` | **not done** — `HALIUM_14.json` is a 404 |
 | 3 | Ship VNDK 34 graphics AIDL libs in HALIUM images — **with** the mapper's XML | Waydroid vendor image | partially built here; see §4 |
 | 4 | Backport the composer threadpool fix to `lineage-20` | `android_hardware_waydroid` | patch ready, not submitted |
-| 5 | Find the MediaTek mapper's GPU-capabilities XML | open | **open** |
+| 5 | MediaTek mapper GPU-capabilities XML | **ANSWERED** — `/vendor/etc/gralloc` | needs an on-device boot to confirm |
 | 6 | Diagnose `libGLES_mali.so` abort in `eglInitialize` | open | **open** |
 
-Items 5 and 6 need MediaTek/Mali familiarity, not better hardware. That is
-where I ran out of road.
+Item 5 was answered by reverse engineering the shipped binary — no vendor
+documentation, about ten minutes with `readelf` and `strings`. An earlier
+version of this file said reverse engineering could not substitute for a vendor
+answer; that was too pessimistic, and item 6 may yet go the same way. Neither
+needs better build hardware.
 
 ## 6. Artifacts in this repo
 
@@ -142,6 +158,9 @@ patches/0001-hwcomposer-don-t-shrink-the-binder-threadpool-*.patch
 scripts/backport_find_aidl.py    reproduces the §3 test on a 1.5.1 device
 scripts/patch_egl.py             egl-mount workaround; REQUIRED on the reference
                                  device today, pending TODO item 1
+scripts/add_gralloc_capabilities.py
+                                 makes /vendor/etc/gralloc visible in the
+                                 container (TODO item 5)
 ```
 
 Built from LineageOS 20 + Waydroid manifests, `TARGET_USE_MESA=false`, in about

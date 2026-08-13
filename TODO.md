@@ -61,17 +61,17 @@ MediaTek's mapper has to land with them.
 
 ---
 
-## For Volla / MediaTek — I cannot do these
+## For Volla / MediaTek
 
-These two need vendor documentation or source access that is not public. They
-are the only things standing between this device and **hardware-accelerated**
-Android, and no amount of build hardware or reverse engineering on my side
-substitutes for the answer.
+Item 5 is **answered** — recovered from the shipped binary, no vendor
+documentation required. An earlier version of this file claimed that no amount
+of reverse engineering could substitute for a vendor answer. That was wrong,
+and it took about ten minutes to disprove. Item 6 is still open and is where
+BSP knowledge would help most.
 
-### 5. Which GPU-capabilities XML does the gralloc mapper require, and where?
+### 5. ✅ ANSWERED — the mapper reads the directory `/vendor/etc/gralloc`
 
-`android.hardware.graphics.mapper@4.0-impl-mediatek.so` aborts during buffer
-format selection:
+Original symptom:
 
 ```
 Abort message: 'Unable to retrieve GPU capabilities. XML file either not found
@@ -79,17 +79,45 @@ Abort message: 'Unable to retrieve GPU capabilities. XML file either not found
   #03 .../mt6878/android.hardware.graphics.mapper@4.0-impl-mediatek.so
         (ip_support_feature(unsigned int, unsigned int, feature_t)+1168)
   #05   mali_gralloc_select_format(...)
-  #07   arm::mapper::hidl::is_supported(...)
 ```
 
-The mapper loads and runs correctly on the host, so the file exists somewhere on
-the device — but inside the Waydroid container the real vendor partition is
-mounted at `/vendor_extra`, not `/vendor`, and the mapper evidently does not find
-it there.
+Recovered from the binary itself:
 
-**What would resolve it:** the path (or search order) this MediaTek build expects
-for its GPU capabilities XML, and whether that path is configurable. A one-line
-answer from someone with the vendor source closes this immediately.
+```sh
+readelf -d mapper.so    # libxml2 is STATICALLY linked -- the parser is not the problem
+strings -a mapper.so
+  /vendor/etc/gralloc                          <- the only path literal in the file
+  Failed to open capability directory:         <- a DIRECTORY, not a single file
+  Read capability file from
+  Failed to stat file for capability reading:
+```
+
+A leaked build path names the component:
+`vendor/mediatek/proprietary/hardware/gpu_mali/mali_avalon/r44p1/.../capabilities`.
+
+On the host that directory holds five files — `cam.xml`, `dpu.xml`,
+`dpu_aeu.xml`, `gpu.xml`, `vpu.xml`, each `<capabilities version="0.2">`.
+
+**The files are already inside the container, at the wrong path.** The host
+vendor partition is rbind-mounted at `/vendor_extra`, so they appear as
+`/vendor_extra/etc/gralloc/`. Meanwhile `/vendor` is Waydroid's own vendor
+image, which has no `etc/gralloc` at all — verified with
+`debugfs -R "ls -l /etc" vendor.img`.
+
+**Fix:** make that directory visible at `/vendor/etc/gralloc` inside the
+container. `scripts/add_gralloc_capabilities.py` does it through Waydroid's
+vendor overlay.
+
+For upstream the natural home is the bind-mount loop in
+`images.py: mount_rootfs()` that already handles `/vendor/lib*/egl`. One
+wrinkle: `helpers.mount.bind()` does `mkdir -p` its destination, but the
+container's `/vendor` is read-only and — unlike `/vendor/lib64/egl` — the
+`gralloc` directory does not already exist in the vendor image to mount onto.
+So either the HALIUM vendor image ships an empty `/vendor/etc/gralloc`, or
+Waydroid creates it in the overlay upper dir first.
+
+*Status: established statically and cross-checked against host and image
+contents; still needs an on-device boot to confirm the abort is gone.*
 
 ### 6. Why does `libGLES_mali.so` abort inside `eglInitialize`?
 
@@ -107,18 +135,51 @@ container, the AIDL allocator **is** reachable from inside, and the
 `android.hardware.graphics.allocator-V2-ndk` / `common-V4-ndk` dependencies are
 satisfied (the earlier `dlopen` failure is gone).
 
-**What would resolve it:** what else the Mali DDK on mt6878 requires at
-`eglInitialize` — additional device nodes, MediaTek `ged`/`ion` interfaces,
-properties, or a sysfs path — when running inside a container rather than as the
-host's own SurfaceFlinger.
+**Retest after item 5 first.** `ip_support_feature` is the capability path, and
+`libGLES_mali.so` consumes the same feature data, so item 6 may simply be item 5
+in a different process. Confirm the mapper stops aborting before building
+instrumentation for this.
+
+**Concrete lead, from `readelf -d` on the mapper**: it hard-links
+**`libged.so`** (MediaTek Graphics Execution Delegator), **`libgpud.so`** (GPU
+daemon) and **`libdmabufheap.so`**. If `libGLES_mali.so` wants the same, the
+candidates inside the container are `/dev/ged` and its sysfs/proc interfaces,
+and the dma-buf heaps (`/dev/dma_heap/mtk_mm`, `mtk_mm-uncached`, `system`) —
+note Android 14 dropped ION in favour of dma-heap. Waydroid also runs its own
+property service, so `vendor.mali.*` / `debug.mali.*` / `ro.board.platform` do
+not exist inside unless injected.
+
+**How to settle it:** compare the syscall trace of the same library on the host
+against inside the container, and look for the first `ENOENT` that differs:
+
+```sh
+strace -f -e trace=openat,access,stat,statx,readlink,ioctl <egl program>
+```
+
+On Ubuntu Touch there is no SurfaceFlinger on the host side — gralloc is reached
+through libhybris from Lomiri, so trace that or the Halium container's allocator
+service, not stock Android. For init-started Android services use Android's own
+`setprop wrap.<service> "strace -f -o /data/local/tmp/x.txt"` rather than
+`LD_PRELOAD`. `ltrace` is useless against Bionic; Frida is the better tool for
+hooking `openat` / `__system_property_get` / `ioctl` on aarch64.
+
+**Do not simply patch out the abort.** If the capability bits never load,
+`mali_gralloc_select_format` picks AFBC/compression flags from uninitialised
+state — silent buffer corruption or a harder fault later. Patch it only as a
+probe to see how much further it gets, never as a fix.
+
+**What would still resolve it fastest:** what else the Mali DDK on mt6878
+requires at `eglInitialize` when running inside a container rather than as the
+host's own compositor.
 
 ### 7. Related, and a fair ask
 
-Ubuntu Touch is shipped on Volla hardware. Working Android app support is one of
-the most requested features for that platform, and it is currently blocked on
-two questions that are trivial for whoever holds the BSP and intractable for
-everyone else. Even partial answers to items 5 and 6 — or pointing at the right
-section of the MediaTek documentation — would unblock the community.
+Ubuntu Touch is shipped on Volla hardware, and working Android app support is
+one of the most requested features for that platform. Item 5 turned out to be
+recoverable from the shipped binaries in minutes, so the remaining ask is
+narrower than it was: confirmation of the GED / dma-heap interfaces the Mali
+driver expects at initialisation, or a pointer to the right section of the
+MediaTek documentation, would likely finish item 6.
 
 ---
 
