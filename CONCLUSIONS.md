@@ -222,4 +222,5 @@ Recorded because each looked convincing and each cost hours.
 - `systemd-oomd` kills on *pressure*, not exhaustion, and kills whole cgroups — `nohup` is no defence. Ubuntu sets `ManagedOOMMemoryPressure=kill` at 50% on `user@1000.service`. Run builds as a `system.slice` unit with `IgnoreOnIsolate=yes`.
 - `all-makefiles-under` is exactly one level deep (`$(wildcard $(1)/*/Android.mk)`).
 - ELF shared libraries cannot ship via `PRODUCT_COPY_FILES`; use a prebuilt module, and `LOCAL_MODULE_STEM` if the name collides.
+- **`objdump` silently disassembles nothing if it lacks the target architecture.** It prints a file header and stops, which looks like an empty range. Check with `objdump -i | grep aarch64`; use `aarch64-linux-gnu-objdump` or AOSP's `llvm-objdump`. Stripped libraries also need addresses taken relative to the nearest exported symbol.
 - **`MAKE_EXIT=0` says nothing about whether your change is in the image.** Twice I produced a green build and a correctly-sized image missing the payload. Verify with `debugfs -R "ls -l /lib64" vendor.img` and compare checksums.

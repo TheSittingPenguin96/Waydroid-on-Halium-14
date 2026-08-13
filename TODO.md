@@ -159,10 +159,56 @@ them — the negatives are the main product of this round.
 
 **What that leaves.** The container's *visible* environment matches the host's:
 same device node, same heaps, same configs, same driver binary. Whatever differs
-is therefore **not observable by listing files** — it is process context
-(capabilities, namespaces, the calling thread's state) or an ioctl-level
-handshake. File inspection and `strings` have genuinely reached their limit here;
-they answered item 5 and cannot answer item 6.
+is therefore **not observable by listing files**.
+
+### Where it actually aborts — recovered by disassembly
+
+The crash gives `pc 0x9aa1d4` inside `libGLES_mali.so`. Disassembling around it
+(the binary is stripped, so work from the nearest exported symbol,
+`egl_winsys_get_implementation`):
+
+```
+9aa1b4:  bl  <local>              variadic call: the assert formatter
+9aa1b8:  bl  9aa1d0               noreturn wrapper
+9aa1bc:  udf #0                   unreachable
+9aa1d0:  str x30, [sp,#-16]!
+9aa1d4:  bl  abort@plt            <- the abort
+```
+
+The formatter loads its arguments as string pointers via `adrp/add`; reading
+them out of the file gives the assert:
+
+```
+function : void get_configs(egl_winsys_display *, const egl_config_attribute **,
+                            EGLint *, const egl_winsys_config **, EGLint *)
+message  : "failed to allocate winsys_configs"
+```
+
+**So the DDK is enumerating EGL configs from the window system and ending up
+with a config list it cannot allocate** — consistent with the window system
+offering zero usable configs. That is a much narrower target than
+"`eglInitialize` aborts".
+
+It also joins up with the other symptom seen on the software path,
+`output buffer not gpu writeable`: both are the same negotiation failing, from
+opposite ends. MediaTek's gralloc decides which formats/usages each IP block
+supports (per the capability XML), and Waydroid's window system —
+`hwcomposer.waydroid.so` plus the gbm/gralloc path — is asking for something
+outside that set, or advertising nothing the Mali winsys accepts.
+
+**Next step, and it is now a narrow one:** find why the winsys config list is
+empty. Candidates, in order of cheapness:
+
+1. Instrument `get_configs`' inputs — Frida hook on `eglInitialize` and on the
+   gralloc `isSupported`/`getConfigs` calls beneath it, logging the formats and
+   usage flags being negotiated.
+2. Compare against the host, where the same DDK builds a working config list.
+3. Check whether `hwcomposer.waydroid.so` advertises a native visual/format the
+   Mali winsys recognises; it was written against Mesa/gbm, not against
+   MediaTek's gralloc.
+
+`strace` alone will probably not show this — the failure is in what the calls
+*return*, not in a missing file or node.
 
 **How to settle it:** compare the syscall trace of the same library on the host
 against inside the container, and look for the first `ENOENT` that differs:

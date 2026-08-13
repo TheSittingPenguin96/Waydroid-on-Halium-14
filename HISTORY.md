@@ -107,6 +107,35 @@ So item 6 is not a missing file, and file inspection cannot answer it. Six
 hypotheses died in that round and the eliminations are recorded in TODO.md,
 which is the more useful output than the one confirmation would have been.
 
+**Sixth step: disassemble rather than guess.** Having run out of files to blame,
+the remaining move was to read the code at the address the crash reports. Two
+things nearly stopped that, both silent:
+
+- The system `objdump` has **no aarch64 support** on this machine. It did not
+  error — it printed a file header and no instructions, which reads exactly like
+  "nothing here". `objdump -i | grep aarch64` returns zero;
+  `aarch64-linux-gnu-objdump` was already installed.
+- The library is stripped, so addresses must be worked out relative to the
+  nearest exported symbol (here `egl_winsys_get_implementation`).
+
+Past that, the abort path is four instructions and its assert formatter loads
+its arguments as string pointers, which can simply be read out of the file:
+
+```
+function : void get_configs(egl_winsys_display *, const egl_config_attribute **,
+                            EGLint *, const egl_winsys_config **, EGLint *)
+message  : "failed to allocate winsys_configs"
+```
+
+That turned "aborts somewhere in `eglInitialize`" into "fails enumerating EGL
+configs from the window system", and tied it to the `output buffer not gpu
+writeable` symptom seen from the other direction on the software path. Both are
+the same format negotiation between MediaTek's gralloc and Waydroid's window
+system, failing from opposite ends.
+
+No disassembler UI, no Frida, no strace — just `objdump` with the right target
+and a hexdump of four string pointers.
+
 ## Positions held and abandoned
 
 | Held | Why it was wrong |
