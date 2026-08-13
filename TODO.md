@@ -105,7 +105,7 @@ image, which has no `etc/gralloc` at all — verified with
 `debugfs -R "ls -l /etc" vendor.img`.
 
 **Fix:** make that directory visible at `/vendor/etc/gralloc` inside the
-container. `scripts/add_gralloc_capabilities.py` does it through Waydroid's
+container. `scripts/expose_mtk_gpu_configs.py` does it through Waydroid's
 vendor overlay.
 
 For upstream the natural home is the bind-mount loop in
@@ -135,10 +135,34 @@ container, the AIDL allocator **is** reachable from inside, and the
 `android.hardware.graphics.allocator-V2-ndk` / `common-V4-ndk` dependencies are
 satisfied (the earlier `dlopen` failure is gone).
 
-**Retest after item 5 first.** `ip_support_feature` is the capability path, and
-`libGLES_mali.so` consumes the same feature data, so item 6 may simply be item 5
-in a different process. Confirm the mapper stops aborting before building
-instrumentation for this.
+**Item 5 is fixed and this still happens — they are separate.** Tested on device
+with the capability XMLs present: the `Unable to retrieve GPU capabilities`
+abort is gone (0 occurrences) and `libGLES_mali.so` still aborts inside
+`eglInitialize`. The call site did move, from `SkiaGLRenderEngine::create` to
+`hwcomposer.waydroid.so`'s `egl_loop`, so it gets further than before.
+
+**Strong candidate, same class of cause — `/vendor/etc/mali_platform.config`.**
+Recovered from the DDK with `strings`, corroborated by the symbol
+`arm::mali::mali_platform_config()`. It exists on the host with real content:
+
+```
+PLATFORM_AGT_FREQUENCY_KHZ=13000
+OSU_PROTECTED_MEMORY_HEAP_NAME=mtk_svp_page-uncached
+```
+
+and is **absent from Waydroid's vendor image** (verified with `debugfs`). The
+second value names a dma-buf heap, consistent with the `libdmabufheap.so`
+dependency. `scripts/expose_mtk_gpu_configs.py` supplies it.
+**Not yet tested — this is the next thing to try.**
+
+Also absent, and worth supplying: `/vendor/etc/meow.cfg`, which
+`libGLES_meow.so` reports as `meow reload base cfg path: na`. It is 9 bytes
+(`[global]`) here, so unlikely to matter on its own.
+
+**A lead that weakened on inspection.** `E libMEOW : plugin: [failed].` looked
+promising, but those plugins are MediaTek game-optimisation extras — GIFT,
+AIVRS (AI variable-rate shading), trace, qt — reading `/data/performance/*.ini`
+and `/data/system/mcd/*`. Almost certainly not required for basic rendering.
 
 **Concrete lead, from `readelf -d` on the mapper**: it hard-links
 **`libged.so`** (MediaTek Graphics Execution Delegator), **`libgpud.so`** (GPU

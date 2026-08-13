@@ -128,7 +128,7 @@ that does not exist.
 
 The libraries therefore belong in a HALIUM_14 image **together with** something
 that makes `/vendor/etc/gralloc` visible. Recovery method in TODO item 5; fix in
-`scripts/add_gralloc_capabilities.py`. Until that is confirmed booting on
+`scripts/expose_mtk_gpu_configs.py`. Until that is confirmed booting on
 device, the warning above still stands for the published image.
 
 ## 5. What actually needs doing
@@ -158,9 +158,9 @@ patches/0001-hwcomposer-don-t-shrink-the-binder-threadpool-*.patch
 scripts/backport_find_aidl.py    reproduces the §3 test on a 1.5.1 device
 scripts/patch_egl.py             egl-mount workaround; REQUIRED on the reference
                                  device today, pending TODO item 1
-scripts/add_gralloc_capabilities.py
-                                 makes /vendor/etc/gralloc visible in the
-                                 container (TODO item 5)
+scripts/expose_mtk_gpu_configs.py
+                                 exposes MediaTek GPU configs to the
+                                 container (TODO items 5 and 6)
 ```
 
 Built from LineageOS 20 + Waydroid manifests, `TARGET_USE_MESA=false`, in about
