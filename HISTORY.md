@@ -43,6 +43,49 @@ waydroid 1.5.1 only probes HIDL.
 Backporting upstream's `find_aidl` — with every earlier hack reverted — flipped
 the device onto the hardware driver, exactly as predicted.
 
+**Fourth position: "the MediaTek questions need vendor documentation."** With
+the hardware path selected, two blockers remained: the gralloc mapper aborting
+on a missing GPU-capabilities XML, and `libGLES_mali.so` aborting inside
+`eglInitialize`. I wrote them up as items only Volla or MediaTek could answer,
+and put this in TODO.md:
+
+> no amount of build hardware or reverse engineering on my side substitutes for
+> the answer
+
+That was wrong, and it was wrong in a way I should have caught. This project's
+own first working principle is *attempt the thing nobody has tried; do not
+answer "the community says this is impossible"*. I had written a blocker off
+without spending ten minutes testing whether it was one.
+
+The correction came from outside — a suggestion to attack the proprietary
+binaries directly, with `strings`, `strace`, an `LD_PRELOAD` shim and a
+disassembler. Two of the specific tips mattered: look for **format strings** as
+well as literals, because MediaTek builds paths from properties and a path built
+from an unset property collapses to garbage with no `openat` to trace; and treat
+the abort's *"not found **or** syntax errors"* as two branches, because the XML
+parser being unresolvable in the `sphal` namespace was as plausible as the file
+being absent.
+
+In the event neither subtlety was needed, and no disassembler was opened:
+
+```sh
+readelf -d mapper.so     # libxml2 is STATICALLY linked -> parser hypothesis dead
+strings -a mapper.so
+  /vendor/etc/gralloc                    # the only path literal in the binary
+  Failed to open capability directory:   # a DIRECTORY, not a single file
+```
+
+The host had `/vendor/etc/gralloc/{cam,dpu,dpu_aeu,gpu,vpu}.xml`; Waydroid's
+vendor image had no `etc/gralloc` at all; and the host copy was already inside
+the container at `/vendor_extra/etc/gralloc`, because the host vendor partition
+is rbind-mounted there. The mapper was scanning a directory that did not exist.
+Elapsed: about ten minutes, entirely static, on a binary that had been sitting
+on the device the whole time.
+
+The same `readelf` output produced the first real lead for the remaining
+blocker: the mapper hard-links `libged.so`, `libgpud.so` and `libdmabufheap.so`,
+pointing at MediaTek's GED interfaces and dma-buf heaps rather than ION.
+
 ## Positions held and abandoned
 
 | Held | Why it was wrong |
@@ -53,6 +96,7 @@ the device onto the hardware driver, exactly as predicted.
 | Booting needs an Android 14 system image | It does not |
 | A VNDK 33/34 ABI mismatch is the cause | The container is coherently Android 13; a real split exists but only on the hardware path |
 | The two prebuilt module names were unused | AIDL module names are generated; the tree already defines V2/V4 as its unfrozen `current` versions |
+| The MediaTek blockers need vendor documentation | Item 5 fell to `readelf -d` and `strings` in about ten minutes, on a binary already on the device |
 
 ## Things that cost the most time
 
@@ -68,6 +112,12 @@ the device onto the hardware driver, exactly as predicted.
   *pressure*, per cgroup, and that a build must live outside the user slice.
 - **Fixing one blocker mostly revealed the next**, and it was tempting to read
   that as progress. Twice the new failure was caused by the fix itself.
+- **Declaring a blocker out of reach without testing it.** The gralloc XML
+  question was written up as needing vendor documentation and published that
+  way. It needed one `strings` invocation. The cost was not large in hours, but
+  had nobody pushed back it would have shipped as a permanent "someone else's
+  problem" — the single worst failure mode in this whole log, because it stops
+  the investigation rather than misdirecting it.
 
 ## What survived from those notes
 
