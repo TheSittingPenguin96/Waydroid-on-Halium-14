@@ -196,19 +196,51 @@ supports (per the capability XML), and Waydroid's window system —
 `hwcomposer.waydroid.so` plus the gbm/gralloc path — is asking for something
 outside that set, or advertising nothing the Mali winsys accepts.
 
-**Next step, and it is now a narrow one:** find why the winsys config list is
-empty. Candidates, in order of cheapness:
+### The failing instruction, and what it implies
 
-1. Instrument `get_configs`' inputs — Frida hook on `eglInitialize` and on the
-   gralloc `isSupported`/`getConfigs` calls beneath it, logging the formats and
-   usage flags being negotiated.
-2. Compare against the host, where the same DDK builds a working config list.
-3. Check whether `hwcomposer.waydroid.so` advertises a native visual/format the
-   Mali winsys recognises; it was written against Mesa/gbm, not against
-   MediaTek's gralloc.
+Following the single `CBZ` that reaches the abort stub gives the exact failure:
 
-`strace` alone will probably not show this — the failure is in what the calls
-*return*, not in a missing file or node.
+```
+9a8fc0:  stp   xzr, xzr, [sp,#112]   zero-init config list A
+9a8fc8:  bl    a18d30                populate list A   (32-byte elements)
+9a8fdc:  sub   x10, x9, x8           countA = (end-begin)/32
+9a8fd4:  stp   xzr, xzr, [sp,#88]    zero-init config list B
+9a8ff4:  bl    a19310                populate list B   (40-byte elements)
+                                     countB = (end-begin)/40
+9a9020:  mov   w8, #0x38             56 = sizeof(winsys_config)
+9a9024:  umull x0, w9, w8            (countA + countB) * 56
+9a902c:  bl    malloc@plt
+9a9034:  cbz   x0, <abort>           malloc returned NULL
+```
+
+**It is a `malloc()` failure, not "no configs found".** That distinction
+matters, and it rules out the obvious reading of the message.
+
+An inference, flagged as such: the container has **no memory cgroup limit**
+(checked) and the host had ~9 GB free at the time, so a genuine out-of-memory
+for a config array is implausible. Android's allocator returns NULL for absurd
+sizes rather than attempting them. That points at **`count` being garbage** —
+i.e. the two list-population calls at `0xa18d30` and `0xa19310` leave the lists
+*inconsistent* (end < begin, or uninitialised), rather than merely empty. An
+empty-but-valid list would give `count = 0`, and `malloc(0)` does not return
+NULL on Bionic.
+
+So the defect is upstream of the allocation: whatever enumerates configs from
+the window system is failing without reporting it, and `get_configs` then trips
+over the wreckage.
+
+**Next step is dynamic and now very targeted.** Static analysis cannot supply
+runtime values; a Frida hook can, in three probes:
+
+1. Hook `malloc` inside `surfaceflinger` and log the size at the call from
+   `libGLES_mali.so+0x9a902c` — if it is absurd, the inference above is
+   confirmed outright.
+2. Hook the two population functions, `libGLES_mali.so+0xa18d30` and
+   `+0xa19310`, and log the list pointers before and after.
+3. Compare all three against the host, where the same DDK builds a working list.
+
+`strace` will not show this. Nothing is missing from the filesystem — the
+failure is in values returned across an in-process call.
 
 **How to settle it:** compare the syscall trace of the same library on the host
 against inside the container, and look for the first `ENOENT` that differs:

@@ -136,6 +136,17 @@ system, failing from opposite ends.
 No disassembler UI, no Frida, no strace — just `objdump` with the right target
 and a hexdump of four string pointers.
 
+Following the one `CBZ` that reaches that abort narrowed it further, and
+overturned the obvious reading of the message: the failure is a plain
+`malloc(count * 56)` returning NULL, **not** "no configs found". With no
+cgroup memory limit on the container and gigabytes free on the host, the
+count is almost certainly garbage — meaning the two list-population calls
+leave their lists inconsistent rather than empty, since an empty list would
+give `malloc(0)`, which does not return NULL on Bionic.
+
+That is where static analysis stops. It can say which instruction fails and
+what that implies; it cannot supply the runtime value that would settle it.
+
 ## Positions held and abandoned
 
 | Held | Why it was wrong |
