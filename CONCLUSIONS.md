@@ -131,6 +131,48 @@ that makes `/vendor/etc/gralloc` visible. Recovery method in TODO item 5; fix in
 `scripts/expose_mtk_gpu_configs.py`. Until that is confirmed booting on
 device, the warning above still stands for the published image.
 
+## 4a. The real ceiling: a Treble version inversion
+
+Four separate aborts were eliminated in sequence, each confirmed on device:
+
+| Fix | Abort removed |
+| --- | --- |
+| `/vendor/etc/gralloc` capability XMLs | `Unable to retrieve GPU capabilities` |
+| VNDK 34 graphics AIDL libraries | `dlopen ... allocator-V2-ndk.so not found` |
+| 42 x `ro.vendor.arm.egl.configs.*` properties | `failed to allocate winsys_configs` |
+| all three together | EGL initialises; `system_server` and both zygotes stable, no crash loop |
+
+The next failure is different in kind:
+
+```
+SurfaceFlinger requests : usage 0x300  (GPU texture + render target)
+MediaTek mapper decodes : usage 0x7f00200000    <- reserved bits set
+                          "Invalid descriptorInfo sizes"
+                          "Invalid attributes to create descriptor for Mapper 4.0"
+GraphicBufferAllocator  : Failed to allocate (128x128) format 1 usage 300: -22
+surfaceflinger          : abort "output buffer not gpu writeable"
+                          RenderEngine::validateOutputBufferUsage
+```
+
+The client and the mapper disagree about the **shape of the buffer descriptor**.
+The obvious explanation was checked and **disproved**: `BufferUsage` is
+byte-identical between AIDL V3 and V4 in this tree, so the enum did not change.
+What remains is an encode/decode mismatch between the Android 13 client
+(`Gralloc4` in the container) and MediaTek's mapper, which is built against
+`graphics.common-V4`.
+
+**This is a Treble version inversion.** Treble permits a system image *newer*
+than the vendor partition -- that is the entire point of it. It does not support
+the reverse. Waydroid on Halium 14 pairs an **Android 13 system image** with an
+**Android 14 vendor partition**, which is backwards, and no amount of copied
+libraries changes what the Android 13 system's own code encodes.
+
+Supplying the V4 libraries let the vendor blobs *load*. It could never make the
+Android 13 client speak V4.
+
+**The remaining blocker therefore needs a system image of Android 14 or newer.**
+That is not a configuration fix, and nothing host-side substitutes for it.
+
 ## 5. What actually needs doing
 
 | # | Item | Where | Status |
@@ -139,8 +181,8 @@ device, the warning above still stands for the published image.
 | 2 | Publish a `HALIUM_14` vendor channel, or map vndk 34 to an existing one | Waydroid OTA / `get_vendor_type()` | **not done** — `HALIUM_14.json` is a 404 |
 | 3 | Ship VNDK 34 graphics AIDL libs in HALIUM images — **with** the mapper's XML | Waydroid vendor image | partially built here; see §4 |
 | 4 | Backport the composer threadpool fix to `lineage-20` | `android_hardware_waydroid` | patch ready, not submitted |
-| 5 | MediaTek mapper GPU-capabilities XML | **ANSWERED** — `/vendor/etc/gralloc` | needs an on-device boot to confirm |
-| 6 | Diagnose `libGLES_mali.so` abort in `eglInitialize` | open | **open** |
+| 5 | MediaTek mapper GPU-capabilities XML | **SOLVED** — `/vendor/etc/gralloc` | confirmed on device |
+| 6 | `libGLES_mali.so` abort in `eglInitialize` | **SOLVED** — missing `ro.vendor.arm.egl.configs.*` | fixed; next blocker is §4a |
 
 Item 5 was answered by reverse engineering the shipped binary — no vendor
 documentation, about ten minutes with `readelf` and `strings`. An earlier

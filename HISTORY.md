@@ -147,6 +147,34 @@ give `malloc(0)`, which does not return NULL on Bionic.
 That is where static analysis stops. It can say which instruction fails and
 what that implies; it cannot supply the runtime value that would settle it.
 
+
+**Seventh position, and the last one: "it's another missing input."** It was —
+twice more. Disassembling the config-population functions showed they are a
+table of thunks, each passing a *property name* to a getter, with symbols like
+`vendor::arm::egl::properties::r8_g8_b8_a8_32bit_fixed_hal_format()`. The host
+defines 42 `ro.vendor.arm.egl.configs.*` properties; the container had none, and
+`lxc.py` never forwards them. Forwarding all 42 through `waydroid.cfg` killed
+the abort. EGL initialised, `system_server` and both zygotes stayed up, and the
+crash loop stopped.
+
+Then the failure changed character, and that is where the investigation ends.
+SurfaceFlinger asks gralloc for `usage 0x300`; MediaTek's mapper decodes
+`0x7f00200000` and reports `Invalid descriptorInfo sizes`. The tempting
+explanation — that `BufferUsage` changed between AIDL V3 and V4 — was checked
+and is **false**: the enum is byte-identical in this tree. What is left is a
+client/mapper disagreement about the descriptor itself, between an Android 13
+system and a mapper built against `graphics.common-V4`.
+
+That is a **Treble version inversion**: system older than vendor, which Treble
+does not support in that direction. Copied libraries let the vendor blobs load;
+they cannot make Android 13's own code encode V4. So the last blocker is not a
+missing file, a missing property or a missing node — it is the pairing itself,
+and it needs a system image of Android 14 or newer.
+
+Six positions were held and abandoned along the way. The one that cost most was
+not any of the wrong diagnoses; it was declaring two items out of reach without
+testing them. Both fell to tools that had been installed the whole time.
+
 ## Positions held and abandoned
 
 | Held | Why it was wrong |
@@ -159,6 +187,7 @@ what that implies; it cannot supply the runtime value that would settle it.
 | The two prebuilt module names were unused | AIDL module names are generated; the tree already defines V2/V4 as its unfrozen `current` versions |
 | The MediaTek blockers need vendor documentation | Item 5 fell to `readelf -d` and `strings` in about ten minutes, on a binary already on the device |
 | Item 6 is another missing config file | Both candidate configs supplied; abort unchanged. Environment matches the host in every respect inspected |
+| The last blocker is something host-side | It is a Treble version inversion: Android 13 system against an Android 14 vendor. Needs a newer system image |
 
 ## Things that cost the most time
 

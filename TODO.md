@@ -63,13 +63,18 @@ MediaTek's mapper has to land with them.
 
 ## For Volla / MediaTek
 
-Item 5 is **answered** — recovered from the shipped binary, no vendor
-documentation required. An earlier version of this file claimed that no amount
-of reverse engineering could substitute for a vendor answer. That was wrong,
-and it took about ten minutes to disprove. Item 6 is still open and is where
-BSP knowledge would help most.
+**Both items are solved, and neither needed vendor documentation.** An earlier
+version of this file claimed that no amount of reverse engineering could
+substitute for a vendor answer. That was wrong on both counts: item 5 fell to
+`readelf`/`strings` in about ten minutes, and item 6 to disassembling the abort
+path and reading the property names out of the binary.
 
-### 5. ✅ ANSWERED — the mapper reads the directory `/vendor/etc/gralloc`
+What now blocks hardware rendering is neither a missing file nor a missing
+property, and it cannot be fixed from the host at all — see
+[CONCLUSIONS.md](CONCLUSIONS.md) §4a. The ask below is retained only because a
+BSP answer would still shorten the road; it is no longer the critical path.
+
+### 5. ✅ SOLVED — the mapper reads the directory `/vendor/etc/gralloc`
 
 Original symptom:
 
@@ -116,10 +121,32 @@ container's `/vendor` is read-only and — unlike `/vendor/lib64/egl` — the
 So either the HALIUM vendor image ships an empty `/vendor/etc/gralloc`, or
 Waydroid creates it in the overlay upper dir first.
 
-*Status: established statically and cross-checked against host and image
-contents; still needs an on-device boot to confirm the abort is gone.*
+*Status: **confirmed on device.** With the directory exposed, the
+`Unable to retrieve GPU capabilities` abort drops to zero occurrences.*
 
-### 6. Why does `libGLES_mali.so` abort inside `eglInitialize`?
+### 6. SOLVED — the Mali EGL winsys reads its config table from properties
+
+Arm's Mali EGL winsys builds its EGLConfig list from Android system properties.
+Recovered from `libGLES_mali.so`: a table of thunks, each loading a property
+name and calling a shared getter, with symbols like
+`vendor::arm::egl::properties::r8_g8_b8_a8_32bit_fixed_hal_format()` and strings
+like `ro.vendor.arm.egl.configs.nv12.recordable`.
+
+This host defines **42** such properties. The container had **none** -- they are
+absent from Waydroid's vendor image and `lxc.py` never forwards them. With no
+properties the config lists come out inconsistent, `malloc(count * 56)` fails,
+and the DDK aborts with `failed to allocate winsys_configs`.
+
+Forwarding all 42 via `waydroid.cfg`'s `[properties]` section
+(`scripts/forward_arm_egl_configs.py`) **eliminates the abort**. Confirmed on
+device: EGL initialises, `system_server` and both zygotes stay up, no crash loop.
+
+The blocker after this one is not a missing anything -- see
+[CONCLUSIONS.md](CONCLUSIONS.md) §4a.
+
+### 6a. Historical: how it presented
+
+Why does `libGLES_mali.so` abort inside `eglInitialize`?
 
 With the VNDK 34 libraries supplied, the Mali DDK loads and executes, then
 `surfaceflinger` aborts inside the driver itself:
@@ -281,19 +308,30 @@ MediaTek documentation, would likely finish item 6.
 My build hardware was inadequate for anything larger than a vendor image, so
 these were never attempted.
 
-### 8. Build and test an Android 14 based Waydroid system image
+### 8. Build a system image of Android 14 or newer — now REQUIRED, with proof
 
-The proper base for a HALIUM_14 image. Note the real obstacle is **not**
-compute: **Waydroid has no `lineage-21` branch at all.** Its trees jump from
-`lineage-20` (Android 13) to `dev/lineage-23.2` (Android 16); Android 14 and 15
-were skipped. An Android 14 base means porting `android_device_waydroid_waydroid`,
-`android_vendor_waydroid`, `android_hardware_waydroid`,
-`android_frameworks_waydroid` and `android_vendor_waydroid_init` to a version
-nobody maintains.
+This was previously listed as "probably better". It is now the **critical
+path**, and the evidence is in [CONCLUSIONS.md](CONCLUSIONS.md) §4a: an
+Android 13 client and MediaTek's `graphics.common-V4` mapper disagree on the
+buffer descriptor's shape, so `GraphicBufferAllocator` fails and SurfaceFlinger
+aborts. That is a **Treble version inversion** -- Treble supports a system image
+newer than the vendor partition, never the reverse -- and no host-side change
+can fix it.
 
-**Probably better:** test `dev/lineage-23.2` (Android 16) instead. It is actively
-maintained and already carries `android_prebuilts_vndk_v34`, which exists
-precisely to serve VNDK 34 vendor partitions like Halium 14's.
+**Test `dev/lineage-23.2` (Android 16) first**, not Android 14:
+
+- it is actively maintained upstream, whereas **Waydroid has no `lineage-21`
+  branch at all** -- its trees jump from `lineage-20` to `dev/lineage-23.2`, so
+  an Android 14 base means porting five trees to a version nobody maintains;
+- it already carries `android_prebuilts_vndk_v34`, which exists precisely to
+  serve VNDK 34 vendor partitions like Halium 14's;
+- and it puts the system *newer* than the vendor, which is the direction Treble
+  actually supports.
+
+Everything else in this repository -- the `find_aidl` fix, the gralloc
+capability directory, the 42 EGL config properties, the composer backport -- is
+a prerequisite such an image would still need. None of it is wasted; all of it
+was verified on device.
 
 ### 9. Retest the whole chain on current Waydroid master
 
