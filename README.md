@@ -122,6 +122,25 @@ It supplies libraries that make MediaTek's mapper *loadable*, which then aborts
 and takes down `surfaceflinger` — worse than leaving them out. It is published
 as a build result and a starting point, not a fix. See CONCLUSIONS.md §4.
 
+## Acknowledgements
+
+**Hugh Manns**, for the suggestion to attack the proprietary binaries directly
+on open items #5 and #6 rather than waiting on vendor documentation. That
+overturned a position stated in this repository — that reverse engineering could
+not substitute for a vendor answer — and item 5 then fell to `readelf -d` and
+`strings` in about ten minutes. It also produced the table of eliminated
+hypotheses under item 6, which is the more useful half of the result even though
+that item remains open.
+
+Two refinements raised while the approach was being weighed are worth recording,
+because they were checked first and checking them was cheap: look for **format
+strings** as well as literals, since MediaTek builds paths from properties and a
+path built from an unset property collapses with no `openat` to trace; and treat
+the abort's *"not found **or** syntax errors"* as two distinct branches. Neither
+applied in the end — the path was a plain literal and libxml2 turned out to be
+statically linked — but ruling them out took seconds and would have saved hours
+had either held.
+
 ## Licence and provenance
 
 Everything here was measured on hardware; nothing is quoted from documentation

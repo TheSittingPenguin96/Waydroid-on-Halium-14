@@ -141,37 +141,28 @@ abort is gone (0 occurrences) and `libGLES_mali.so` still aborts inside
 `eglInitialize`. The call site did move, from `SkiaGLRenderEngine::create` to
 `hwcomposer.waydroid.so`'s `egl_loop`, so it gets further than before.
 
-**Strong candidate, same class of cause — `/vendor/etc/mali_platform.config`.**
-Recovered from the DDK with `strings`, corroborated by the symbol
-`arm::mali::mali_platform_config()`. It exists on the host with real content:
+### Hypotheses tested and eliminated
 
-```
-PLATFORM_AGT_FREQUENCY_KHZ=13000
-OSU_PROTECTED_MEMORY_HEAP_NAME=mtk_svp_page-uncached
-```
+Each of these was tried on device. **All are dead.** Recorded so nobody repeats
+them — the negatives are the main product of this round.
 
-and is **absent from Waydroid's vendor image** (verified with `debugfs`). The
-second value names a dma-buf heap, consistent with the `libdmabufheap.so`
-dependency. `scripts/expose_mtk_gpu_configs.py` supplies it.
-**Not yet tested — this is the next thing to try.**
+| Hypothesis | How it died |
+| --- | --- |
+| Item 6 is item 5 in another process | Item 5 fixed and confirmed; item 6 aborts at the identical address |
+| Missing `/vendor/etc/mali_platform.config` | Supplied to the container; abort unchanged at `eglInitialize+1276` |
+| Missing `/vendor/etc/meow.cfg` | Supplied; MEOW *still* logs `cfg path: na`, so that message was never about the file |
+| `libMEOW : plugin: [failed]` is fatal | Those plugins are game-optimisation extras (GIFT, AIVRS, trace, qt) reading `/data/performance/*.ini` |
+| Missing GED device nodes | `/dev/ged*` does not exist **on the host either**; only `/proc/ged` |
+| Missing / different dma-buf heaps | Heap lists are identical host vs container, all 12 of them |
+| `OSU_PROTECTED_MEMORY_HEAP_NAME` unsatisfiable | `mtk_svp_page-uncached` is absent on **both** sides, and the host works regardless |
+| `/dev/mali0` unreachable in the container | Present, mode 666, same major/minor as the host |
 
-Also absent, and worth supplying: `/vendor/etc/meow.cfg`, which
-`libGLES_meow.so` reports as `meow reload base cfg path: na`. It is 9 bytes
-(`[global]`) here, so unlikely to matter on its own.
-
-**A lead that weakened on inspection.** `E libMEOW : plugin: [failed].` looked
-promising, but those plugins are MediaTek game-optimisation extras — GIFT,
-AIVRS (AI variable-rate shading), trace, qt — reading `/data/performance/*.ini`
-and `/data/system/mcd/*`. Almost certainly not required for basic rendering.
-
-**Concrete lead, from `readelf -d` on the mapper**: it hard-links
-**`libged.so`** (MediaTek Graphics Execution Delegator), **`libgpud.so`** (GPU
-daemon) and **`libdmabufheap.so`**. If `libGLES_mali.so` wants the same, the
-candidates inside the container are `/dev/ged` and its sysfs/proc interfaces,
-and the dma-buf heaps (`/dev/dma_heap/mtk_mm`, `mtk_mm-uncached`, `system`) —
-note Android 14 dropped ION in favour of dma-heap. Waydroid also runs its own
-property service, so `vendor.mali.*` / `debug.mali.*` / `ro.board.platform` do
-not exist inside unless injected.
+**What that leaves.** The container's *visible* environment matches the host's:
+same device node, same heaps, same configs, same driver binary. Whatever differs
+is therefore **not observable by listing files** — it is process context
+(capabilities, namespaces, the calling thread's state) or an ioctl-level
+handshake. File inspection and `strings` have genuinely reached their limit here;
+they answered item 5 and cannot answer item 6.
 
 **How to settle it:** compare the syscall trace of the same library on the host
 against inside the container, and look for the first `ENOENT` that differs:

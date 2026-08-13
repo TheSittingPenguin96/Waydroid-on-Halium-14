@@ -86,6 +86,27 @@ The same `readelf` output produced the first real lead for the remaining
 blocker: the mapper hard-links `libged.so`, `libgpud.so` and `libdmabufheap.so`,
 pointing at MediaTek's GED interfaces and dma-buf heaps rather than ION.
 
+**Fifth position: "item 6 is the same kind of missing file."** It was a
+reasonable bet — the technique had just worked, and a second pass over
+`libGLES_meow.so`, the `libMEOW_*` plugins and the 46 MB Mali DDK turned up two
+more configs absent from Waydroid's vendor image: `/vendor/etc/mali_platform.config`
+(with real content, including a dma-buf heap name) and `/vendor/etc/meow.cfg`.
+
+Supplying both changed nothing. `libGLES_mali.so` aborted at the identical
+address. Worse for the theory, `libMEOW` went on logging `cfg path: na` with the
+file plainly present, which means that message was never about the file at all —
+a reminder that a log line naming a thing is not evidence about that thing.
+
+Checking the environment finished the idea off: `/dev/ged*` does not exist on
+the **host** either, the dma-buf heap lists are identical on both sides, the
+heap named in `mali_platform.config` is absent from both, and `/dev/mali0` is
+present in the container with the same major/minor as the host. The container's
+visible environment matches the host's in every respect inspected.
+
+So item 6 is not a missing file, and file inspection cannot answer it. Six
+hypotheses died in that round and the eliminations are recorded in TODO.md,
+which is the more useful output than the one confirmation would have been.
+
 ## Positions held and abandoned
 
 | Held | Why it was wrong |
@@ -97,6 +118,7 @@ pointing at MediaTek's GED interfaces and dma-buf heaps rather than ION.
 | A VNDK 33/34 ABI mismatch is the cause | The container is coherently Android 13; a real split exists but only on the hardware path |
 | The two prebuilt module names were unused | AIDL module names are generated; the tree already defines V2/V4 as its unfrozen `current` versions |
 | The MediaTek blockers need vendor documentation | Item 5 fell to `readelf -d` and `strings` in about ten minutes, on a binary already on the device |
+| Item 6 is another missing config file | Both candidate configs supplied; abort unchanged. Environment matches the host in every respect inspected |
 
 ## Things that cost the most time
 
