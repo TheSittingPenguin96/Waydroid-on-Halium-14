@@ -1,5 +1,8 @@
 # Open items
 
+The project is blocked on item 8. Items 1-7 are prerequisites; none of them
+produces working hardware-accelerated Waydroid on its own.
+
 Grouped by who is best placed to do them. Technical background for every item is
 in [CONCLUSIONS.md](CONCLUSIONS.md).
 
@@ -10,7 +13,7 @@ Reference device: Volla Phone Plinius (ansuz), Ubuntu Touch 24.04.4, SoC mt6878
 
 ## For UBports / Ubuntu Touch packaging
 
-### 1. Ship a Waydroid with `find_aidl` — highest impact, lowest effort
+### 1. A Waydroid package new enough to include `find_aidl` — highest impact
 
 Ubuntu Touch 24.04.4 ships **waydroid 1.5.1**, whose `lxc.py` probes for the
 graphics allocator over HIDL only. Halium 14 devices publish it over **AIDL**,
@@ -22,10 +25,18 @@ elif find_aidl("android.hardware.graphics.allocator.IAllocator/default"):
     gralloc = "android"
 ```
 
-**This single change is the fix.** Verified on device: with it, the container
-selects the host's hardware EGL driver instead of falling back.
+**This single change fixes the EGL-selection failure** — the one producing
+`couldn't find an OpenGL ES implementation`. Verified on device: the container
+then selects the host's real EGL driver instead of falling back. It does **not**
+deliver working hardware rendering; three further blockers follow, and the last
+may need a newer system image (item 8). This is a prerequisite, not the fix.
 
-*Needs:* a Waydroid package bump and retest on any Halium 14 device.
+The change is [`9bd8db0` "Detect AIDL gralloc5"](https://github.com/waydroid/waydroid/commit/9bd8db09d5d317e58d423ff7448399883d071b91)
+by Jami Kettunen, already in Waydroid upstream.
+
+*Needs:* a package bump and retest on Halium 14 hardware. I have no view on how
+much work that is on the UBports side; the device-side evidence that it is
+sufficient for EGL selection is in CONCLUSIONS.md §3.
 
 ---
 
@@ -36,7 +47,7 @@ selects the host's hardware EGL driver instead of falling back.
 `get_vendor_type()` computes `HALIUM_14` from `ro.vndk.version=34`, but
 `https://ota.waydro.id/vendor/waydroid_arm64/HALIUM_14.json` is a **404**.
 `waydroid init` therefore dies at a URL fetch before touching any hardware —
-which is the whole origin of "Waydroid does not support Halium 14".
+which is where most reports of Halium 14 failure start.
 
 Either publish the channel, map 34 to a published one, or at minimum fail with a
 message that says the channel does not exist yet rather than a bare fetch error.
@@ -63,18 +74,17 @@ MediaTek's mapper has to land with them.
 
 ## For Volla / MediaTek
 
-**Both items are solved, and neither needed vendor documentation.** An earlier
-version of this file claimed that no amount of reverse engineering could
-substitute for a vendor answer. That was wrong on both counts: item 5 fell to
-`readelf`/`strings` in about ten minutes, and item 6 to disassembling the abort
-path and reading the property names out of the binary.
+Both items below turned out to be answerable from the shipped binaries. An
+earlier version of this file said reverse engineering could not substitute for a
+vendor answer; that was wrong, and the record of it is left in place.
 
-What now blocks hardware rendering is neither a missing file nor a missing
-property, and it cannot be fixed from the host at all — see
-[CONCLUSIONS.md](CONCLUSIONS.md) §4a. The ask below is retained only because a
-BSP answer would still shorten the road; it is no longer the critical path.
+**Solving them did not unblock hardware rendering.** They were real and they are
+fixed on device, and the failure simply moved to the blocker in
+[CONCLUSIONS.md](CONCLUSIONS.md) §4a — which is not a missing file or property.
+A BSP answer would still be valuable for whoever tackles that, but neither item
+below is on the critical path any more.
 
-### 5. ✅ SOLVED — the mapper reads the directory `/vendor/etc/gralloc`
+### 5. Solved (did not unblock) — the mapper reads `/vendor/etc/gralloc`
 
 Original symptom:
 
@@ -124,7 +134,7 @@ Waydroid creates it in the overlay upper dir first.
 *Status: **confirmed on device.** With the directory exposed, the
 `Unable to retrieve GPU capabilities` abort drops to zero occurrences.*
 
-### 6. SOLVED — the Mali EGL winsys reads its config table from properties
+### 6. Solved (did not unblock) — the Mali EGL winsys reads its config table from properties
 
 Arm's Mali EGL winsys builds its EGLConfig list from Android system properties.
 Recovered from `libGLES_mali.so`: a table of thunks, each loading a property
@@ -138,13 +148,20 @@ properties the config lists come out inconsistent, `malloc(count * 56)` fails,
 and the DDK aborts with `failed to allocate winsys_configs`.
 
 Forwarding all 42 via `waydroid.cfg`'s `[properties]` section
-(`scripts/forward_arm_egl_configs.py`) **eliminates the abort**. Confirmed on
-device: EGL initialises, `system_server` and both zygotes stay up, no crash loop.
+(`scripts/forward_arm_egl_configs.py`) **eliminates this particular abort**.
+Confirmed on device: EGL initialises and the crash loop stops. **This is not
+working hardware rendering** — the failure moves to the buffer-descriptor
+mismatch of §4a.
 
 The blocker after this one is not a missing anything -- see
 [CONCLUSIONS.md](CONCLUSIONS.md) §4a.
 
-### 6a. Historical: how it presented
+### 6a. Historical — how item 6 presented, and the dead ends
+
+**Everything in this subsection is superseded.** Item 6 was solved by forwarding
+the EGL config properties, above. It is kept only so nobody repeats the
+eliminated hypotheses; the Frida probes and syscall traces described below are no
+longer worth doing.
 
 Why does `libGLES_mali.so` abort inside `eglInitialize`?
 
@@ -292,14 +309,13 @@ probe to see how much further it gets, never as a fix.
 requires at `eglInitialize` when running inside a container rather than as the
 host's own compositor.
 
-### 7. Related, and a fair ask
+### 7. Related
 
-Ubuntu Touch is shipped on Volla hardware, and working Android app support is
-one of the most requested features for that platform. Item 5 turned out to be
-recoverable from the shipped binaries in minutes, so the remaining ask is
-narrower than it was: confirmation of the GED / dma-heap interfaces the Mali
-driver expects at initialisation, or a pointer to the right section of the
-MediaTek documentation, would likely finish item 6.
+Items 5 and 6 were both recoverable from the shipped binaries, so there is no
+longer a MediaTek question on the critical path. If MediaTek or Volla can confirm
+how `BufferDescriptorInfo` is expected to be encoded for this mapper build, that
+would settle §4a directly — and would say whether a newer system image is
+actually required or whether the mis-packing is on Waydroid's side.
 
 ---
 
@@ -308,15 +324,20 @@ MediaTek documentation, would likely finish item 6.
 My build hardware was inadequate for anything larger than a vendor image, so
 these were never attempted.
 
-### 8. Build a system image of Android 14 or newer — now REQUIRED, with proof
+### 8. Test a system image of Android 14 or newer — the leading hypothesis
 
-This was previously listed as "probably better". It is now the **critical
-path**, and the evidence is in [CONCLUSIONS.md](CONCLUSIONS.md) §4a: an
-Android 13 client and MediaTek's `graphics.common-V4` mapper disagree on the
-buffer descriptor's shape, so `GraphicBufferAllocator` fails and SurfaceFlinger
-aborts. That is a **Treble version inversion** -- Treble supports a system image
-newer than the vendor partition, never the reverse -- and no host-side change
-can fix it.
+This is now the **critical path**, though the reasoning behind it is a
+hypothesis rather than a proof — see [CONCLUSIONS.md](CONCLUSIONS.md) §4a. What
+was measured is that an Android 13 client and MediaTek's `graphics.common-V4`
+mapper disagree on the buffer descriptor's shape, so `GraphicBufferAllocator`
+fails and SurfaceFlinger aborts. The leading explanation is a **Treble version
+inversion** — Treble supports a system image newer than the vendor partition,
+not the reverse. Testing it needs the image; nobody has built one.
+
+Note the alternative that was not ruled out: the mis-packing may originate in
+Waydroid's own gralloc client path rather than in the version pairing, in which
+case no new image is needed. Whoever tests this should check that first — it is
+much cheaper.
 
 **Test `dev/lineage-23.2` (Android 16) first**, not Android 14:
 
@@ -341,6 +362,9 @@ would confirm the finding generalises beyond one handset.
 
 ### 10. Test on non-MediaTek Halium 14 hardware
 
-Items 5 and 6 are MediaTek-specific. A Halium 14 device with a Qualcomm or
-different Mali stack may well reach hardware rendering with only item 1 applied.
-That would be a strong result and would narrow the remaining problem to MediaTek.
+Items 5 and 6 are MediaTek-specific, but the §4a blocker is very likely not —
+any Android 13 system image on any Android 14 vendor partition should hit the
+same descriptor mismatch. A Qualcomm Halium 14 device would clear items 5 and 6
+for free and then, on this reasoning, stop in the same place. Testing one is
+still worth doing precisely because it would confirm or refute that; do not
+expect hardware rendering from it.

@@ -1,148 +1,159 @@
-# Waydroid on Halium 14
+# Waydroid on Halium 14 — investigation report
 
-**Waydroid now boots to the Android launcher on a Volla Phone Plinius running
-Ubuntu Touch 24.04.4** — a device combination the community had written off as
-unsupported.
+**There is nothing here to install.** This is a device-level measurement of where
+the current stack breaks on one phone, offered to the people working the problem
+upstream.
 
-The *fix* turned out to need no new images, no new Android base, and no patch of
-mine. The blocker was a **single capability probe on the wrong bus**, and
-upstream Waydroid had already fixed it. Ubuntu Touch simply ships an older
-Waydroid.
+Hardware-accelerated Waydroid on Halium 14 **does not work**, and nothing in this
+repository makes it work. What runs on my own phone is software rendering only,
+via a local patch to a package-owned file that reverts on the next
+`apt upgrade`. Do not expect to reproduce it, and please do not try on a device
+you depend on.
 
-(The reference phone does currently run a local stopgap, because that upstream
-fix has not reached it yet — see [Status](#status).)
+Halium 14 support is an open, actively worked problem upstream — see the
+[UBports tracking issue](https://gitlab.com/ubports/porting/reference-device-ports/halium-14/volla-phone-plinius/volla-ansuz/-/work_items/1).
+
+Reference device: Volla Phone Plinius (ansuz), Ubuntu Touch 24.04.4, SoC mt6878
+(MediaTek, Mali), host `ro.vndk.version=34`, waydroid 1.5.1.
 
 ---
 
-## The finding, in short
+## What actually goes wrong
 
 Halium 14 publishes the graphics allocator over **AIDL**. Waydroid 1.5.1 probes
-for it over **HIDL** only, finds nothing, and falls back to
-`egl=swiftshader` — throwing away the hardware driver name it had already read
-from the host. Waydroid's own init patch then rewrites `swiftshader` to `angle`,
-whose drivers have meanwhile been hidden by a bind mount that is itself
-perfectly correct. The result is the error everyone reports:
+for it over **HIDL** only, finds nothing, and falls back to `egl=swiftshader`.
+Waydroid's own init patch rewrites that to `angle`, whose drivers have meanwhile
+been hidden by a bind mount that is itself correct. The error most reports end
+at:
 
 ```
 couldn't find an OpenGL ES implementation, make sure you set
 ro.hardware.egl or ro.board.platform
 ```
 
-Upstream master added `find_aidl` and closed this. **Shipping a current Waydroid
-to Ubuntu Touch is the fix.**
+**This is already fixed upstream**, by
+[`9bd8db0` "Detect AIDL gralloc5"](https://github.com/waydroid/waydroid/commit/9bd8db09d5d317e58d423ff7448399883d071b91)
+from Jami Kettunen. Ubuntu Touch 24.04.4 simply ships an older Waydroid (1.5.1)
+that predates it. This repo verifies on hardware that the change is sufficient
+to select the host's real EGL driver.
 
-I verified this end to end: backporting `find_aidl` alone, with every hack
-reverted and stock published images, flipped the device onto the *hardware*
-driver.
+Clearing that exposed four further blockers. Three were solved here. The fourth
+is where the investigation stops.
 
-## What was done here
+## Where it stops
 
-| | |
-| --- | --- |
-| **Diagnosed** | the full causal chain, six links, each measured on the device |
-| **Verified** | `find_aidl` backported → `ro.hardware.egl=meow`, hardware driver loads |
-| **Built** | a HALIUM_14 vendor image carrying the VNDK 34 graphics AIDL libraries and a composer fix |
-| **Located** | the remaining hardware-rendering blockers, precisely, in MediaTek's driver stack |
-| **Corrected** | six of my own conclusions that turned out to be wrong |
+With `find_aidl` applied, plus three fixes established here, EGL initialises and
+`system_server` comes up. Rendering still fails:
+
+```
+SurfaceFlinger requests : usage 0x300
+MediaTek mapper decodes : usage 0x7f00200000   <- reserved bits set
+                          "Invalid descriptorInfo sizes"
+surfaceflinger          : abort "output buffer not gpu writeable"
+```
+
+The client and the mapper disagree about the buffer descriptor's shape. **The
+leading explanation is a Treble version inversion** — an Android 13 system image
+against an Android 14 vendor partition, which is the direction Treble does not
+support. **I have not tested that**, and it needs a newer system image I could
+not build. An alternative I could not rule out is a descriptor mis-packing in
+Waydroid's own gralloc client path or `hwcomposer.waydroid.so`, which would be
+fixable without any new image. Anyone with a mapper trace could separate the two
+quickly. See [CONCLUSIONS.md](CONCLUSIONS.md) §4a.
+
+## What is in here
+
+A device-level trace of the boot failure, each link measured on the Plinius; a
+verification that upstream's `find_aidl` alone selects the hardware driver; three
+further blockers found by reverse-engineering the shipped MediaTek binaries and
+confirmed fixed on device; and a HALIUM_14 vendor image built with the VNDK 34
+graphics AIDL libraries — **which must not be installed on its own**, see below.
+
+Six conclusions I reached along the way turned out to be wrong. They are recorded
+in [CONCLUSIONS.md](CONCLUSIONS.md) §7, and the route including the dead ends is
+in [HISTORY.md](HISTORY.md).
+
+The two findings most likely to be useful to someone else:
+
+- **`/vendor/etc/gralloc`** — MediaTek's mapper reads GPU capability XML from
+  that directory. Waydroid's vendor image has no such directory, and the host's
+  copy lands at `/vendor_extra`.
+- **42 × `ro.vendor.arm.egl.configs.*`** — Arm's EGL winsys builds its EGLConfig
+  table from these properties. The container has none, and `lxc.py` forwards
+  several other host property families but not this one.
 
 ## Where to start
 
 | File | What it is |
 | --- | --- |
-| **[CONCLUSIONS.md](CONCLUSIONS.md)** | **The authoritative technical account.** Root cause, the tested chain, verification, and the traps. Start here. |
-| **[TODO.md](TODO.md)** | What is still open, and who is best placed to do it — including items only Volla or MediaTek can realistically answer. |
-| [HISTORY.md](HISTORY.md) | How the investigation actually went, including the wrong turns. Kept because the dead ends are instructive. |
+| **[CONCLUSIONS.md](CONCLUSIONS.md)** | Current findings, and what has actually been tested. Start here. |
+| **[TODO.md](TODO.md)** | What is still open, grouped by where the change would have to land. |
+| [HISTORY.md](HISTORY.md) | How the investigation went, including the wrong turns. |
 
 ## Repository contents
 
 ```
-CONCLUSIONS.md      authoritative findings
-TODO.md             open items, by who can do them
-patches/            composer threadpool backport for lineage-20
-prebuilts/          VNDK 34 graphics AIDL libs used in the vendor image
-scripts/            backport_find_aidl.py  reproduces the key verification
-                    patch_egl.py           REQUIRED on the reference device today (see Status)
-artifacts/          the built HALIUM_14 vendor image + checksum
-HISTORY.md          the route, including the wrong turns
+CONCLUSIONS.md   findings, and what was tested versus inferred
+TODO.md          open items, grouped by where a change would land
+HISTORY.md       the route taken, including six abandoned positions
+patches/         composer threadpool backport for lineage-20
+prebuilts/       VNDK 34 graphics AIDL libs used in the vendor image
+scripts/         backport_find_aidl.py       verifies the upstream fix
+                 expose_mtk_gpu_configs.py   exposes /vendor/etc/gralloc etc.
+                 forward_arm_egl_configs.py  forwards the 42 EGL properties
+                 patch_egl.py                software-rendering stopgap
+artifacts/       the built HALIUM_14 vendor image + checksum
 ```
 
-The built image is ~90 MB; `artifacts/` is better suited to a release
-attachment than to git history.
+Each script removes exactly one blocker and leaves you no closer to usable
+Waydroid. Read the docstring in each before running it; two of them can stop
+Waydroid booting on a device where it currently does.
 
-### Reproducing the key test
+## The reference device, and why not to copy it
 
-On an affected device running waydroid 1.5.1:
-
-```sh
-sudo python3 scripts/backport_find_aidl.py     # adds find_aidl, reverts old hacks
-waydroid session stop && sudo systemctl restart waydroid-container
-waydroid session start
-sudo grep hardware /var/lib/waydroid/waydroid_base.prop
-```
-
-Expected: `ro.hardware.gralloc=android`, `ro.hardware.egl=meow` (or your host's
-value), `ro.hardware.vulkan=mali` — instead of `default` / `swiftshader` /
-`pastel`.
-
-## Status
-
-### What the reference device actually runs
-
-Waydroid works on the reference phone today — but **not on stock software.** It
-needs `scripts/patch_egl.py` applied, which stops the host EGL bind mount hiding
-the vendor image's ANGLE drivers:
+My phone boots Waydroid with **software rendering only**, and only because
+`scripts/patch_egl.py` patches a package-owned file:
 
 ```
 waydroid 1.5.1 (stock, unmodified)
 published lineage-20.0 VANILLA system + HALIUM_13 vendor images (stock)
-+ scripts/patch_egl.py                 <- required, or it does not boot
++ scripts/patch_egl.py            <- required, or it does not boot
 ```
 
-That patch is a **workaround, not the fix.** The fix is [TODO](TODO.md) item 1 —
-a Waydroid new enough to have `find_aidl`, which makes the bind mount correct
-again and selects the hardware driver instead of ANGLE.
+It is slow, it reverts on `apt upgrade`, and Waydroid then stops booting with
+`couldn't find an OpenGL ES implementation`. The original is saved as
+`images.py.orig`. If a future Waydroid package includes `find_aidl`, do **not**
+re-apply this patch — retest instead, because the whole picture changes.
 
-⚠ `images.py` is package-owned, so **`apt upgrade waydroid` reverts the patch**
-and Waydroid stops booting with `couldn't find an OpenGL ES implementation`. The
-original is saved beside it as `images.py.orig`. If that upgrade brings a
-Waydroid with `find_aidl`, do *not* re-apply the patch — retest instead, because
-the whole picture changes.
-
-### Rendering
-
-**Software rendering works today** — the device boots and runs Android apps.
-**Hardware rendering does not yet**: with `find_aidl` the Mali driver is
-selected and loads, but MediaTek's gralloc mapper aborts on a missing
-GPU-capabilities XML, and `libGLES_mali.so` aborts inside `eglInitialize`.
-Those two are the frontier, and they need MediaTek/Mali knowledge rather than
-more compute. See [TODO.md](TODO.md).
-
-⚠ **Do not install the vendor image in `artifacts/` expecting an improvement.**
-It supplies libraries that make MediaTek's mapper *loadable*, which then aborts
-and takes down `surfaceflinger` — worse than leaving them out. It is published
-as a build result and a starting point, not a fix. See CONCLUSIONS.md §4.
+⚠ **Do not install the vendor image in `artifacts/`.** On its own it makes
+MediaTek's gralloc mapper loadable, which then aborts and takes down
+`surfaceflinger` — worse than leaving it out. It is a build result and a
+starting point for someone assembling a correct image, not something to flash.
 
 ## Acknowledgements
 
+**Jami Kettunen**, for
+[`9bd8db0`](https://github.com/waydroid/waydroid/commit/9bd8db09d5d317e58d423ff7448399883d071b91),
+the upstream fix that this repository does no more than verify on hardware, and
+for maintaining the Halium 14 tracking issue. **NotKit**, who has been developing
+against that issue. This repo is one device-level datapoint for their work, not a
+parallel effort.
+
 **Hugh Manns**, for the suggestion to attack the proprietary binaries directly
-on open items #5 and #6 rather than waiting on vendor documentation. That
-overturned a position stated in this repository — that reverse engineering could
-not substitute for a vendor answer — and item 5 then fell to `readelf -d` and
-`strings` in about ten minutes. It also produced the table of eliminated
-hypotheses under item 6, which is the more useful half of the result even though
-that item remains open.
+rather than wait on vendor documentation. That overturned a position stated here
+— that reverse engineering could not substitute for a vendor answer — and both
+MediaTek-specific blockers then fell to `readelf`, `strings` and `objdump`.
 
-Two refinements raised while the approach was being weighed are worth recording,
-because they were checked first and checking them was cheap: look for **format
-strings** as well as literals, since MediaTek builds paths from properties and a
-path built from an unset property collapses with no `openat` to trace; and treat
-the abort's *"not found **or** syntax errors"* as two distinct branches. Neither
-applied in the end — the path was a plain literal and libxml2 turned out to be
-statically linked — but ruling them out took seconds and would have saved hours
-had either held.
+## Provenance and licence
 
-## Licence and provenance
+Everything here was measured on this device; nothing is repeated secondhand.
+Where I have inferred rather than measured, it is flagged as such — §4a is the
+important one. Corrections welcome; several of my own are in CONCLUSIONS.md §7.
 
-Everything here was measured on hardware; nothing is quoted from documentation
-or forums. Corrections welcome — several of my own are recorded in
-CONCLUSIONS.md §7.
+`prebuilts/vndk34-arm64/*.so` are unmodified AOSP VNDK 34 binaries taken from
+[`waydroid/android_prebuilts_vndk_v34`](https://github.com/waydroid/android_prebuilts_vndk_v34)
+(branch `dev/lineage-23.2`), `arm64/arch-arm64-armv8-a/shared/vndk-sp/`, and are
+Apache-2.0. The prose, scripts and patches in this repository are
+GPL-3.0-or-later. Documentation was drafted with AI assistance; every
+measurement in it was taken on the hardware described and is reproducible from
+the commands given.

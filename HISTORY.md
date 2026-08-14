@@ -8,7 +8,8 @@ Nothing in this file should be acted on directly.
 
 ## The route
 
-**Starting point.** Community consensus: Waydroid does not support Halium 14.
+**Starting point.** Waydroid does not work on Halium 14; the tracking issue was
+open upstream and the cause not yet isolated at device level.
 The visible symptom was `waydroid init` dying on a 404 for
 `HALIUM_14.json`, and — once that was bypassed with a locally served
 `HALIUM_13` manifest — zygote and surfaceflinger aborting with
@@ -52,10 +53,9 @@ and put this in TODO.md:
 > no amount of build hardware or reverse engineering on my side substitutes for
 > the answer
 
-That was wrong, and it was wrong in a way I should have caught. This project's
-own first working principle is *attempt the thing nobody has tried; do not
-answer "the community says this is impossible"*. I had written a blocker off
-without spending ten minutes testing whether it was one.
+That was wrong, and in a way I should have caught. This project's own first
+working principle is *test the assumption before recording it as a blocker*. I
+had written one off without spending ten minutes finding out.
 
 The correction came from outside — a suggestion to attack the proprietary
 binaries directly, with `strings`, `strace`, an `LD_PRELOAD` shim and a
@@ -103,7 +103,7 @@ heap named in `mali_platform.config` is absent from both, and `/dev/mali0` is
 present in the container with the same major/minor as the host. The container's
 visible environment matches the host's in every respect inspected.
 
-So item 6 is not a missing file, and file inspection cannot answer it. Six
+So item 6 is not a missing file, and file inspection cannot answer it. Eight
 hypotheses died in that round and the eliminations are recorded in TODO.md,
 which is the more useful output than the one confirmation would have been.
 
@@ -144,8 +144,8 @@ count is almost certainly garbage — meaning the two list-population calls
 leave their lists inconsistent rather than empty, since an empty list would
 give `malloc(0)`, which does not return NULL on Bionic.
 
-That is where static analysis stops. It can say which instruction fails and
-what that implies; it cannot supply the runtime value that would settle it.
+That is where this round of static analysis stopped — wrongly, as the next
+section shows: more disassembly settled it without any runtime values at all.
 
 
 **Seventh position, and the last one: "it's another missing input."** It was —
@@ -165,11 +165,13 @@ and is **false**: the enum is byte-identical in this tree. What is left is a
 client/mapper disagreement about the descriptor itself, between an Android 13
 system and a mapper built against `graphics.common-V4`.
 
-That is a **Treble version inversion**: system older than vendor, which Treble
-does not support in that direction. Copied libraries let the vendor blobs load;
-they cannot make Android 13's own code encode V4. So the last blocker is not a
-missing file, a missing property or a missing node — it is the pairing itself,
-and it needs a system image of Android 14 or newer.
+The leading explanation is a **Treble version inversion**: system older than
+vendor, which Treble does not support in that direction. But that is a
+hypothesis, not a result — it was never tested, it would need a system image
+nobody has built, and a descriptor mis-packing on Waydroid's own side was not
+ruled out. Recorded in CONCLUSIONS §4a with that caveat attached, because
+re-asserting an "Android 14 required" claim after having already disproved one
+version of it is exactly the mistake this file exists to catch.
 
 Six positions were held and abandoned along the way. The one that cost most was
 not any of the wrong diagnoses; it was declaring two items out of reach without
@@ -182,12 +184,12 @@ testing them. Both fell to tools that had been installed the whole time.
 | `angle` is a bug in init | It is the intended generic path; its drivers ship in the vendor image |
 | The EGL bind mount is the bug | It is correct and load-bearing — it is how Halium devices get hardware GL |
 | The composer threadpool abort must be fixed | It never occurs on the clean path; it was an artifact of my own hack force-loading the Mali driver |
-| Booting needs an Android 14 system image | It does not |
+| Booting needs an Android 14 system image | It does not — but hardware rendering may well, see CONCLUSIONS §4a |
 | A VNDK 33/34 ABI mismatch is the cause | The container is coherently Android 13; a real split exists but only on the hardware path |
 | The two prebuilt module names were unused | AIDL module names are generated; the tree already defines V2/V4 as its unfrozen `current` versions |
 | The MediaTek blockers need vendor documentation | Item 5 fell to `readelf -d` and `strings` in about ten minutes, on a binary already on the device |
 | Item 6 is another missing config file | Both candidate configs supplied; abort unchanged. Environment matches the host in every respect inspected |
-| The last blocker is something host-side | It is a Treble version inversion: Android 13 system against an Android 14 vendor. Needs a newer system image |
+| The last blocker is something host-side | Leading explanation is a Treble version inversion — Android 13 system against an Android 14 vendor. Untested; a Waydroid-side descriptor mis-packing was not ruled out |
 
 ## Things that cost the most time
 
@@ -213,5 +215,5 @@ testing them. Both fell to tools that had been installed the whole time.
 ## What survived from those notes
 
 The operational lessons are consolidated into CONCLUSIONS.md §8 (traps). The
-build procedure is in the repository README. The only thing lost is a set of
+build notes are in CONCLUSIONS.md §6. The only thing lost is a set of
 intermediate conclusions that were superseded, which is the point.

@@ -3,6 +3,11 @@
 Forward the host's ro.vendor.arm.egl.configs.* properties into the Waydroid
 container.
 
+NOTE: this removes ONE abort and reveals the next. Afterwards EGL initialises
+and the crash loop stops -- and rendering still does not work, because the
+blocker underneath is unresolved (CONCLUSIONS.md 4a). Nothing in this repo,
+including this script, produces working hardware-accelerated Waydroid.
+
 WHY
   Arm's Mali EGL winsys builds its EGLConfig list from Android system
   properties. Recovered from libGLES_mali.so: a table of thunks, each loading a

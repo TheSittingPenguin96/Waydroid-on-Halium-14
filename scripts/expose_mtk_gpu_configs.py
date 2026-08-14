@@ -2,6 +2,9 @@
 """
 Expose MediaTek's GPU configuration files to the Waydroid container.
 
+NOTE: this removes ONE abort. It does not produce working or accelerated
+Waydroid, and on its own it achieves nothing useful. See CONCLUSIONS.md 4a.
+
 THE PROBLEM
   MediaTek's graphics stack reads several configuration files from /vendor/etc.
   Inside the Waydroid container, /vendor is Waydroid's own vendor image, which
@@ -23,9 +26,12 @@ WHAT NEEDS EXPOSING, AND HOW IT WAS FOUND
       Real content on this device:
         PLATFORM_AGT_FREQUENCY_KHZ=13000
         OSU_PROTECTED_MEMORY_HEAP_NAME=mtk_svp_page-uncached
-      The second value names a dma-buf heap, which is consistent with the
-      libdmabufheap.so dependency. Candidate cause of the libGLES_mali.so
-      abort inside eglInitialize -- NOT yet confirmed.
+      The second value names a dma-buf heap, consistent with the
+      libdmabufheap.so dependency. This WAS a candidate cause of the
+      libGLES_mali.so eglInitialize abort; it is DISPROVED -- supplying it left
+      the abort unchanged at the identical address. The real cause was missing
+      ro.vendor.arm.egl.configs.* properties; see forward_arm_egl_configs.py.
+      Copied here for completeness only.
 
   /vendor/etc/meow.cfg
       libGLES_meow.so, "meow reload base cfg path: %s" (logs "na" when absent)

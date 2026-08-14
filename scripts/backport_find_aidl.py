@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
-"""Backport upstream Waydroid's find_aidl() gralloc probe into 1.5.1,
-and revert the earlier diagnostic images.py hack."""
+"""Backport upstream Waydroid's find_aidl() gralloc probe into 1.5.1.
+
+The change itself is upstream 9bd8db0 "Detect AIDL gralloc5" by Jami Kettunen;
+this script only applies it to an older installed Waydroid so the result can be
+verified on device.
+
+WHAT IT ACHIEVES: the container stops falling back to swiftshader/angle and
+selects the host's real EGL driver. That is all. It does NOT produce working
+hardware-accelerated Waydroid -- the driver then loads and aborts further along,
+and the ceiling underneath (CONCLUSIONS.md section 4a) is unresolved.
+
+WARNING -- THIS CAN STOP WAYDROID BOOTING. It reverts patch_egl.py by restoring
+images.py from images.py.orig. If your device currently boots Waydroid only
+because patch_egl.py is applied, running this will stop it booting. Re-apply
+patch_egl.py to get back.
+"""
 import shutil, os, sys
 
 # ---- 1. revert the images.py diagnostic hack -------------------------------
